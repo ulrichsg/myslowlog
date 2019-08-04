@@ -1,0 +1,10 @@
+[package]
+name = "mysqlow"
+version = "0.1.0"
+authors = ["Ulrich Schmidt-Goertz"]
+homepage = "https://github.com/ulrichsg/mysqlow"
+
+[dependencies]
+chrono = "0.4.7"
+regex = "1.2.0"
+structopt = "0.2.18"
