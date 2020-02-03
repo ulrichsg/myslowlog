@@ -1,13 +1,17 @@
+extern crate chrono;
 extern crate regex;
 extern crate structopt;
+
+mod log_parser;
+mod summarize;
 
 use std::io;
 use std::fs::File;
 use std::process;
 use structopt::StructOpt;
 
-mod log_parser;
 use log_parser::parse_log;
+use summarize::summarize;
 
 #[derive(Debug, StructOpt)]
 struct Opt {
@@ -33,15 +37,32 @@ fn main() {
             parse_log(file)
         }
     };
+
     for entry in &log_entries {
         println!(
-            "Executed in {:.3} seconds returning {} row(s)",
+            "Executed in {:.3} seconds returning {} row(s) for {}@{}",
             entry.query_time.num_microseconds().unwrap() as f64 / 1_000_000.0,
             entry.rows_sent,
+            entry.user,
+            entry.host
         );
-        println!("{}", entry.query);
+        let q = if entry.query.len() < 120 { &entry.query } else { &entry.query[..120] };
+        println!("{}", q);
         println!();
     }
+
+    let summary = summarize(&log_entries);
+    println!("Summary\n=======");
+    println!(
+        "{} queries total, average execution time {:.3} seconds",
+        summary.num_queries,
+        summary.avg_execution_time.num_microseconds().unwrap() as f64 / 1_000_000.0,
+    );
+    println!(
+        "Execution time: average {:.3} seconds, maximum {:.3} seconds",
+        summary.avg_execution_time.num_microseconds().unwrap() as f64 / 1_000_000.0,
+        summary.max_execution_time.num_microseconds().unwrap() as f64 / 1_000_000.0,
+    );
 }
 
 fn print_version() {
