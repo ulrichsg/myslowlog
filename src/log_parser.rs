@@ -1,14 +1,18 @@
 use crate::chrono::{DateTime, Duration, FixedOffset};
 use regex::{Match, Regex};
-use std::io::{BufReader, BufRead, Read};
+use std::io::{BufRead, BufReader, Read};
 use std::iter::Peekable;
 
 trait AdvanceWhile<I: Iterator> {
-    fn advance_while<P>(&mut self, predicate: P) -> Option<I::Item> where P: Fn(&I::Item) -> bool;
+    fn advance_while<P>(&mut self, predicate: P) -> Option<I::Item>
+    where
+        P: Fn(&I::Item) -> bool;
 }
 
 impl<I: Iterator> AdvanceWhile<I> for Peekable<I> {
-    fn advance_while<P>(&mut self, predicate: P) -> Option<I::Item> where P: Fn(&I::Item) -> bool
+    fn advance_while<P>(&mut self, predicate: P) -> Option<I::Item>
+    where
+        P: Fn(&I::Item) -> bool,
     {
         let mut result: Option<I::Item> = None;
         while let Some(true) = self.peek().map(&predicate) {
@@ -35,26 +39,22 @@ pub fn parse_log(log: impl Read) -> Vec<LogEntry> {
     let mut lines = reader.lines().peekable();
     let mut entries = Vec::new();
 
-    let time_regex = Regex
-        ::new(r"^# Time: (\S+)")
-        .unwrap();
-    let user_regex = Regex
-        ::new(r"^# User@Host: (\w+)\[[^\]]+\] @\s+\[([\d.]+)\]")
-        .unwrap();
-    let metric_regex = Regex
-        ::new(r"^# Query_time: ([\d.]+)\s+Lock_time: ([\d.]+)\s+Rows_sent: (\d+)\s+Rows_examined: (\d+)")
-        .unwrap();
+    let time_regex = Regex::new(r"^# Time: (\S+)").unwrap();
+    let user_regex = Regex::new(r"^# User@Host: (\w+)\[[^\]]+\] @\s+\[([\d.]+)\]").unwrap();
+    let metric_regex = Regex::new(
+        r"^# Query_time: ([\d.]+)\s+Lock_time: ([\d.]+)\s+Rows_sent: (\d+)\s+Rows_examined: (\d+)",
+    )
+    .unwrap();
 
-    loop {
-        let line = match lines.next() {
-            Some(l) => l.unwrap(),
-            _ => break,
-        };
+    while let Some(l) = lines.next() {
+        let line = l.unwrap();
         if !line.starts_with("# Time") {
             continue;
         }
 
-        let time_caps = time_regex.captures(&line).expect("Timestamp matching failed");
+        let time_caps = time_regex
+            .captures(&line)
+            .expect("Timestamp matching failed");
         let time_cap = time_caps.get(1);
         let timestamp = match time_cap {
             Some(cap) => DateTime::parse_from_str(cap.as_str(), "%+").unwrap(),
@@ -65,7 +65,9 @@ pub fn parse_log(log: impl Read) -> Vec<LogEntry> {
             Some(l) => l.unwrap(),
             _ => break,
         };
-        let user_caps = user_regex.captures(&line).expect("User/Host matching failed");
+        let user_caps = user_regex
+            .captures(&line)
+            .expect("User/Host matching failed");
         let user = user_caps.get(1).unwrap().as_str().to_string();
         let host = user_caps.get(2).unwrap().as_str().to_string();
 
@@ -73,7 +75,9 @@ pub fn parse_log(log: impl Read) -> Vec<LogEntry> {
             Some(l) => l.unwrap(),
             _ => break,
         };
-        let metric_caps = metric_regex.captures(&line).expect("Metric matching failed");
+        let metric_caps = metric_regex
+            .captures(&line)
+            .expect("Metric matching failed");
         let query_time = microseconds_to_duration(metric_caps.get(1).unwrap());
         let lock_time = microseconds_to_duration(metric_caps.get(2).unwrap());
         let rows_sent = metric_caps.get(3).unwrap().as_str().parse::<i32>().unwrap();
@@ -81,7 +85,7 @@ pub fn parse_log(log: impl Read) -> Vec<LogEntry> {
 
         let maybe_query = lines
             .by_ref()
-            .advance_while(|next| !next.as_ref().unwrap().starts_with("#"));
+            .advance_while(|next| !next.as_ref().unwrap().starts_with('#'));
         let query = match maybe_query {
             Some(q) => q.unwrap(),
             _ => break,

@@ -5,8 +5,8 @@ extern crate structopt;
 mod log_parser;
 mod summarize;
 
-use std::io;
 use std::fs::File;
+use std::io;
 use std::process;
 use structopt::StructOpt;
 
@@ -46,7 +46,11 @@ fn main() {
             entry.user,
             entry.host
         );
-        let q = if entry.query.len() < 120 { &entry.query } else { &entry.query[..120] };
+        let q = if entry.query.len() < 120 {
+            &entry.query
+        } else {
+            &entry.query[..120]
+        };
         println!("{}", q);
         println!();
     }
