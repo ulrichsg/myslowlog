@@ -5,6 +5,7 @@ extern crate sqlparser;
 extern crate structopt;
 extern crate proc_macro;
 
+mod aggregate;
 mod canonicalize;
 mod log_parser;
 mod summarize;
@@ -14,9 +15,10 @@ use std::io;
 use std::process;
 use structopt::StructOpt;
 
+use aggregate::aggregate;
 use canonicalize::{canonicalize, CanonicalLogEntry};
 use log_parser::parse_log;
-use summarize::summarize;
+use summarize::{summarize_aggregates};
 
 #[derive(Debug, StructOpt)]
 struct Opt {
@@ -34,6 +36,7 @@ fn main() {
         print_version();
         process::exit(0);
     }
+
     let log_entries = {
         if opt.filename.is_empty() {
             parse_log(io::stdin())
@@ -49,38 +52,26 @@ fn main() {
         .map(canonicalize)
         .collect();
 
-    for canonical_entry in &canonical_log_entries {
-        let entry = &canonical_entry.entry;
+    let aggregate_log_entries = aggregate(canonical_log_entries);
+
+    for aggregate_entry in aggregate_log_entries.values() {
+        let canonical_entry = aggregate_entry.entries.first().unwrap();
         println!(
-            "Executed in {:.3} seconds returning {} row(s) for {}@{}",
-            entry.query_time.num_microseconds().unwrap() as f64 / 1_000_000.0,
-            entry.rows_sent,
-            entry.user,
-            entry.host
+            "{} queries, avg time {:.3} seconds, max time {:.3} seconds",
+            aggregate_entry.count,
+            aggregate_entry.avg_query_time as f64 / 1_000_000.0,
+            aggregate_entry.max_query_time as f64 / 1_000_000.0,
         );
-
-        let q = if entry.query.len() < 120 {
-            &entry.query
-        } else {
-            &entry.query[..120]
-        };
-        println!("{}", &entry.query);
-
-        let cq = if canonical_entry.canonical_query.len() < 120 {
-            &canonical_entry.canonical_query
-        } else {
-            &canonical_entry.canonical_query[..120]
-        };
-        println!("{}", &canonical_entry.canonical_query);
-
+        println!("{}", canonical_entry.canonical_query);
         println!();
     }
 
-    let summary = summarize(&log_entries);
+    let summary = summarize_aggregates(&aggregate_log_entries);
     println!("Summary\n=======");
     println!(
-        "{} queries total, average execution time {:.3} seconds",
-        summary.num_queries,
+        "{} unique queries ({} total), average execution time {:.3} seconds",
+        summary.unique_queries,
+        summary.total_queries,
         summary.avg_execution_time.num_microseconds().unwrap() as f64 / 1_000_000.0,
     );
     println!(

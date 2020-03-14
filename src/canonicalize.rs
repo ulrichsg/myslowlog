@@ -4,12 +4,28 @@ use sqlparser::dialect::MySqlDialect;
 use sqlparser::ast::{Statement, OrderByExpr, Expr, Value, DateTimeField, SetExpr, Values, Select, SelectItem, TableWithJoins, Join, JoinOperator, JoinConstraint, TableFactor, Cte};
 use sqlparser::ast::Query;
 use log_parser::LogEntry;
+use std::fmt;
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct CanonicalLogEntry {
     pub entry: LogEntry,
     pub canonical_query: String,
     pub hash: String,
+}
+
+impl fmt::Display for CanonicalLogEntry {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let entry = &self.entry;
+        write!(
+            f,
+            "Executed in {:.3} seconds returning {} row(s) for {}@{}\n{}",
+            entry.query_time.num_microseconds().unwrap() as f64 / 1_000_000.0,
+            entry.rows_sent,
+            entry.user,
+            entry.host,
+            &self.canonical_query
+        )
+    }
 }
 
 pub fn canonicalize(entry: LogEntry) -> CanonicalLogEntry {
@@ -22,8 +38,8 @@ pub fn canonicalize(entry: LogEntry) -> CanonicalLogEntry {
 
     CanonicalLogEntry {
         entry: entry.clone(),
-        canonical_query,
-        hash: Sha1::from(entry.query.clone()).digest().to_string(),
+        canonical_query: canonical_query.clone(),
+        hash: Sha1::from(canonical_query).digest().to_string(),
     }
 }
 
@@ -206,12 +222,21 @@ fn canonicalize_expr(expr: Expr) -> Expr {
     match expr {
         Expr::IsNull(e) => Expr::IsNull(map_boxed_expr(e)),
         Expr::IsNotNull(e) => Expr::IsNotNull(map_boxed_expr(e)),
+        // reduce all lists down to 1 element
         Expr::InList { expr, list, negated } =>
             Expr::InList {
                 expr: map_boxed_expr(expr),
-                list: map_exprs(list),
+                list: match list.first() {
+                    Some(expr) => vec![canonicalize_expr(expr.to_owned())],
+                    None => Vec::new(),
+                },
                 negated,
             },
+        // Expr::InList { expr, list, negated } =>
+        //     Expr::InList {
+        //         expr: map_boxed_expr(expr),
+        //         list: map_exprs(list),
+        //         negated,
         Expr::InSubquery { expr, subquery, negated } =>
             Expr::InSubquery {
                 expr: map_boxed_expr(expr),
