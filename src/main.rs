@@ -1,9 +1,9 @@
 extern crate chrono;
+extern crate proc_macro;
 extern crate regex;
 extern crate sha1;
 extern crate sqlparser;
 extern crate structopt;
-extern crate proc_macro;
 
 mod aggregate;
 mod canonicalize;
@@ -18,7 +18,7 @@ use structopt::StructOpt;
 use aggregate::aggregate;
 use canonicalize::{canonicalize, CanonicalLogEntry};
 use log_parser::parse_log;
-use summarize::{summarize_aggregates};
+use summarize::summarize_aggregates;
 
 #[derive(Debug, StructOpt)]
 struct Opt {
@@ -46,11 +46,8 @@ fn main() {
         }
     };
 
-    let canonical_log_entries: Vec<CanonicalLogEntry> = log_entries
-        .clone()
-        .into_iter()
-        .map(canonicalize)
-        .collect();
+    let canonical_log_entries: Vec<CanonicalLogEntry> =
+        log_entries.into_iter().map(canonicalize).collect();
 
     let aggregate_log_entries = aggregate(canonical_log_entries);
 

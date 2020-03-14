@@ -1,7 +1,6 @@
-use chrono::Duration;
-use log_parser::LogEntry;
-use std::cmp::max;
 use aggregate::AggregateLogEntry;
+use chrono::Duration;
+use std::cmp::max;
 use std::collections::HashMap;
 
 pub struct Summary {
@@ -12,17 +11,15 @@ pub struct Summary {
 }
 
 pub fn summarize_aggregates(entries: &HashMap<String, AggregateLogEntry>) -> Summary {
-    let total_queries = entries.values().fold(0, |acc, val| {
-        acc + val.count
-    });
+    let total_queries = entries.values().fold(0, |acc, val| acc + val.count);
 
-    let max_execution_time = entries.values().fold(0, |acc, val| {
-        max(acc, val.max_query_time)
-    });
+    let max_execution_time = entries
+        .values()
+        .fold(0, |acc, val| max(acc, val.max_query_time));
 
-    let total_execution_time = entries.values().fold(0, |acc, val| {
-        acc + val.avg_query_time * val.count
-    });
+    let total_execution_time = entries
+        .values()
+        .fold(0, |acc, val| acc + val.avg_query_time * val.count);
 
     let avg_execution_time = total_execution_time / total_queries;
 
