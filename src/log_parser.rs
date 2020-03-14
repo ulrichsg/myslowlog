@@ -1,4 +1,4 @@
-use crate::chrono::{DateTime, Duration, FixedOffset};
+use chrono::{DateTime, Duration, FixedOffset};
 use regex::{Match, Regex};
 use std::io::{BufRead, BufReader, Read};
 use std::iter::Peekable;
@@ -22,7 +22,7 @@ impl<I: Iterator> AdvanceWhile<I> for Peekable<I> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct LogEntry {
     pub timestamp: DateTime<FixedOffset>,
     pub user: String,

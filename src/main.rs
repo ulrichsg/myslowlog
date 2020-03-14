@@ -1,7 +1,11 @@
 extern crate chrono;
 extern crate regex;
+extern crate sha1;
+extern crate sqlparser;
 extern crate structopt;
+extern crate proc_macro;
 
+mod canonicalize;
 mod log_parser;
 mod summarize;
 
@@ -10,6 +14,7 @@ use std::io;
 use std::process;
 use structopt::StructOpt;
 
+use canonicalize::{canonicalize, CanonicalLogEntry};
 use log_parser::parse_log;
 use summarize::summarize;
 
@@ -38,7 +43,14 @@ fn main() {
         }
     };
 
-    for entry in &log_entries {
+    let canonical_log_entries: Vec<CanonicalLogEntry> = log_entries
+        .clone()
+        .into_iter()
+        .map(canonicalize)
+        .collect();
+
+    for canonical_entry in &canonical_log_entries {
+        let entry = &canonical_entry.entry;
         println!(
             "Executed in {:.3} seconds returning {} row(s) for {}@{}",
             entry.query_time.num_microseconds().unwrap() as f64 / 1_000_000.0,
@@ -46,12 +58,21 @@ fn main() {
             entry.user,
             entry.host
         );
+
         let q = if entry.query.len() < 120 {
             &entry.query
         } else {
             &entry.query[..120]
         };
-        println!("{}", q);
+        println!("{}", &entry.query);
+
+        let cq = if canonical_entry.canonical_query.len() < 120 {
+            &canonical_entry.canonical_query
+        } else {
+            &canonical_entry.canonical_query[..120]
+        };
+        println!("{}", &canonical_entry.canonical_query);
+
         println!();
     }
 

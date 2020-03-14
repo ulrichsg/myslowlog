@@ -1,4 +1,4 @@
-use crate::chrono::Duration;
+use chrono::Duration;
 use log_parser::LogEntry;
 use std::cmp::max;
 
