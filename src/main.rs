@@ -1,83 +1,122 @@
-extern crate chrono;
-extern crate proc_macro;
-extern crate rayon;
-extern crate regex;
-extern crate sha1;
-extern crate sqlparser;
-extern crate structopt;
+use std::fs::File;
+use std::io::Write;
+use std::{io, process};
+
+use rayon::prelude::*;
+
+use crate::aggregate::{aggregate_entries, aggregate_normalized, AggregateLogEntry};
+use crate::filters::Filter;
+use crate::log_parser::{parse_log, LogEntry};
+use crate::normalize::{normalize, NormalizedLogEntry};
+use crate::opt::{parse_opts, Opt, SortOrder};
 
 mod aggregate;
-mod canonicalize;
+mod filters;
 mod log_parser;
-mod summarize;
-
-use std::fs::File;
-use std::io;
-use std::process;
-use structopt::StructOpt;
-
-use aggregate::aggregate;
-use canonicalize::{canonicalize, CanonicalLogEntry};
-use log_parser::parse_log;
-use rayon::prelude::*;
-use summarize::summarize_aggregates;
-
-#[derive(Debug, StructOpt)]
-struct Opt {
-    #[structopt(short = "i", long = "infile", default_value = "")]
-    /// The path to the logfile. If not given, will try reading from stdin
-    filename: String,
-    #[structopt(short = "v", long = "version")]
-    /// Prints the program's version number
-    version: bool,
-}
+mod normalize;
+mod opt;
 
 fn main() {
-    let opt = Opt::from_args();
+    let (opt, filters) = parse_opts();
     if opt.version {
         print_version();
         process::exit(0);
     }
 
-    let log_entries = {
-        if opt.filename.is_empty() {
-            parse_log(io::stdin())
-        } else {
-            let file = File::open(opt.filename).expect("Unable to read from file");
+    let all_entries = {
+        if let Some(filename) = &opt.filename {
+            let file = File::open(filename).expect("Unable to read from file");
             parse_log(file)
+        } else {
+            parse_log(io::stdin())
         }
     };
 
-    let canonical_log_entries: Vec<CanonicalLogEntry> =
-        log_entries.into_par_iter().map(canonicalize).collect();
+    match (opt.aggregate, opt.normalize) {
+        (_, true) => render_normalized(all_entries, &filters, &opt),
+        (true, _) => render_aggregated(all_entries, &filters, &opt),
+        _ => render_individual(all_entries, &filters, &opt),
+    };
+}
 
-    let aggregate_log_entries = aggregate(canonical_log_entries);
+fn render_individual(entries: Vec<LogEntry>, filters: &[Box<dyn Filter>], options: &Opt) {
+    let mut filtered: Vec<LogEntry> = entries
+        .into_par_iter()
+        .filter(|entry| filters.is_empty() || filters.iter().all(|filter| filter.matches(entry)))
+        .collect();
 
-    for aggregate_entry in aggregate_log_entries.values() {
-        let canonical_entry = aggregate_entry.entries.first().unwrap();
-        println!(
-            "{} queries, avg time {:.3} seconds, max time {:.3} seconds",
-            aggregate_entry.count,
-            aggregate_entry.avg_query_time as f64 / 1_000_000.0,
-            aggregate_entry.max_query_time as f64 / 1_000_000.0,
-        );
-        println!("{}", canonical_entry.canonical_query);
-        println!();
-    }
+    match options.order {
+        None | Some(SortOrder::Count) => (),
+        _ => filtered.sort_unstable_by_key(|e| e.query_time),
+    };
 
-    let summary = summarize_aggregates(&aggregate_log_entries);
-    println!("Summary\n=======");
-    println!(
-        "{} unique queries ({} total), average execution time {:.3} seconds",
-        summary.unique_queries,
-        summary.total_queries,
-        summary.avg_execution_time.num_microseconds().unwrap() as f64 / 1_000_000.0,
-    );
-    println!(
-        "Execution time: average {:.3} seconds, maximum {:.3} seconds",
-        summary.avg_execution_time.num_microseconds().unwrap() as f64 / 1_000_000.0,
-        summary.max_execution_time.num_microseconds().unwrap() as f64 / 1_000_000.0,
-    );
+    let mut stdout = io::stdout().lock();
+
+    filtered.iter().rev().take(options.limit).enumerate().for_each(|(i, entry)| {
+        writeln!(
+            stdout,
+            "#{}: [{}] {}@{}, query_time {:.3} s, lock_time {}, rows_examined {}, rows_sent {}",
+            i + 1,
+            entry.timestamp,
+            entry.user,
+            entry.host,
+            entry.query_time.as_seconds_f64(),
+            entry.lock_time,
+            entry.rows_examined,
+            entry.rows_sent,
+        )
+        .unwrap();
+        writeln!(stdout, "{}", entry.query).unwrap();
+    });
+}
+
+fn render_aggregated(entries: Vec<LogEntry>, filters: &[Box<dyn Filter>], options: &Opt) {
+    let filtered: Vec<LogEntry> = entries
+        .into_par_iter()
+        .filter(|entry| filters.is_empty() || filters.iter().all(|filter| filter.matches(entry)))
+        .collect();
+
+    let aggregated = aggregate_entries(filtered);
+    print_aggregated(aggregated, options);
+}
+
+fn render_normalized(entries: Vec<LogEntry>, filters: &[Box<dyn Filter>], options: &Opt) {
+    let normalized: Vec<NormalizedLogEntry> = entries
+        .into_par_iter()
+        .filter(|entry| filters.is_empty() || filters.iter().all(|filter| filter.matches(entry)))
+        .map(normalize)
+        .collect();
+
+    let aggregated = aggregate_normalized(normalized);
+    print_aggregated(aggregated, options);
+}
+
+fn print_aggregated(entries: ahash::HashMap<String, AggregateLogEntry>, options: &Opt) {
+    let mut entries = entries.values().cloned().collect::<Vec<AggregateLogEntry>>();
+
+    match options.order {
+        Some(SortOrder::Count) => entries.sort_unstable_by_key(|e| e.count),
+        Some(SortOrder::TotalTime) => entries.sort_unstable_by_key(|e| e.total_query_time),
+        Some(SortOrder::MaxTime) => entries.sort_unstable_by_key(|e| e.max_query_time),
+        Some(SortOrder::AvgTime) => entries.sort_unstable_by_key(|e| e.avg_query_time),
+        None => (),
+    };
+
+    let mut stdout = io::stdout().lock();
+
+    entries.iter().rev().enumerate().take(options.limit).for_each(|(i, entry)| {
+        writeln!(
+            stdout,
+            "#{}: count {}, total: {:.3} s, avg {:.3} s, max {:.3} s",
+            i + 1,
+            entry.count,
+            entry.total_query_time as f64 / 1_000_000.0,
+            entry.avg_query_time as f64 / 1_000_000.0,
+            entry.max_query_time as f64 / 1_000_000.0,
+        )
+        .unwrap();
+        writeln!(stdout, "{}", entry.query).unwrap();
+    });
 }
 
 fn print_version() {
