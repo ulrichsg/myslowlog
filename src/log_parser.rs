@@ -7,15 +7,12 @@ use time::{Duration, OffsetDateTime};
 
 trait AdvanceWhile<I: Iterator> {
     fn advance_while<P>(&mut self, predicate: P) -> Option<I::Item>
-    where
-        P: Fn(&I::Item) -> bool;
+    where P: Fn(&I::Item) -> bool;
 }
 
 impl<I: Iterator> AdvanceWhile<I> for Peekable<I> {
     fn advance_while<P>(&mut self, predicate: P) -> Option<I::Item>
-    where
-        P: Fn(&I::Item) -> bool,
-    {
+    where P: Fn(&I::Item) -> bool {
         let mut result: Option<I::Item> = None;
         while let Some(true) = self.peek().map(&predicate) {
             result = self.next();
@@ -110,10 +107,11 @@ pub fn parse_log(log: impl Read) -> Vec<LogEntry> {
 
             // In general, if a query stretches across multiple log lines, we insert a space
             // to avoid accidentally breaking the syntax. However, in pathological cases
-            // where a line is wrapped because it is overly long, the break may occur in the middle
-            // of a word or number, so adding the space would be counterproductive.
-            // There is no easy way to make completely sure whether we need it or not,
-            // but this heuristic is good enough for the cases I've seen.
+            // where a line is wrapped because it is overly long, the break may occur in the
+            // middle of a word or number, so adding the space would be
+            // counterproductive. There is no easy way to make completely sure
+            // whether we need it or not, but this heuristic is good enough for
+            // the cases I've seen.
             let padding = if query.ends_with(|c: char| c.is_ascii_digit())
                 && next_line.starts_with(|c: char| c.is_ascii_digit())
             {

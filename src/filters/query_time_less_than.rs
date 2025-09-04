@@ -6,9 +6,7 @@ pub struct QueryTimeLessThan {
 }
 
 impl QueryTimeLessThan {
-    pub fn new(msec: i64) -> QueryTimeLessThan {
-        QueryTimeLessThan { msec }
-    }
+    pub fn new(msec: i64) -> QueryTimeLessThan { QueryTimeLessThan { msec } }
 }
 
 impl Filter for QueryTimeLessThan {

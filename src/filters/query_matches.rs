@@ -16,7 +16,5 @@ impl QueryMatches {
 }
 
 impl Filter for QueryMatches {
-    fn matches(&self, log_entry: &LogEntry) -> bool {
-        self.regex.is_match(&log_entry.query)
-    }
+    fn matches(&self, log_entry: &LogEntry) -> bool { self.regex.is_match(&log_entry.query) }
 }

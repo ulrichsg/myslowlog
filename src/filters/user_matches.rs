@@ -16,7 +16,5 @@ impl UserMatches {
 }
 
 impl Filter for UserMatches {
-    fn matches(&self, log_entry: &LogEntry) -> bool {
-        self.regex.is_match(&log_entry.user)
-    }
+    fn matches(&self, log_entry: &LogEntry) -> bool { self.regex.is_match(&log_entry.user) }
 }

@@ -1,12 +1,13 @@
 use std::fmt;
 
 use sqlparser::ast::{
-    Assignment, Distinct, Expr, GroupByExpr, Join, JoinConstraint, JoinOperator, Offset,
-    OrderByExpr, Query, Select, SelectItem, SetExpr, Statement, TableFactor, TableWithJoins, Value,
-    Values,
+    Assignment, CaseWhen, Delete, Distinct, Expr, GroupByExpr, Insert, Join, JoinConstraint,
+    JoinOperator, OrderByExpr, Query, Select, SelectItem, SetExpr, Statement, TableFactor,
+    TableWithJoins, Value, ValueWithSpan, Values,
 };
 use sqlparser::dialect::MySqlDialect;
 use sqlparser::parser::Parser;
+use sqlparser::tokenizer::Span;
 
 use crate::log_parser::LogEntry;
 
@@ -52,81 +53,82 @@ fn normalize_ast(ast: &[Statement]) -> String {
 fn normalize_stmt(stmt: &Statement) -> Statement {
     match stmt {
         Statement::Query(query) => Statement::Query(Box::new(normalize_query(query))),
-        Statement::Insert { .. } => normalize_insert(stmt),
+        Statement::Insert(insert) => Statement::Insert(normalize_insert(insert)),
         Statement::Update { .. } => normalize_update(stmt),
-        Statement::Delete { .. } => normalize_delete(stmt),
+        Statement::Delete(delete) => Statement::Delete(normalize_delete(delete)),
         default => default.clone(),
     }
 }
 
 fn normalize_query(query: &Query) -> Query {
-    let order_by = query.order_by.iter().map(normalize_order_by).collect();
     Query {
         with: query.with.clone(),
         body: Box::new(normalize_set_expr(&query.body)),
-        order_by,
-        limit: query.limit.clone(),
-        offset: query.offset.as_ref().map(normalize_offset),
+        order_by: query.order_by.to_owned(),
+        limit_clause: query.limit_clause.to_owned(),
         fetch: query.fetch.clone(),
         locks: query.locks.clone(),
+        for_clause: query.for_clause.to_owned(),
+        settings: query.settings.to_owned(),
+        format_clause: query.format_clause.to_owned(),
+        pipe_operators: query.pipe_operators.to_owned(),
     }
 }
 
-fn normalize_insert(stmt: &Statement) -> Statement {
-    match stmt {
-        Statement::Insert { into, table_name, columns, source, on, .. } => Statement::Insert {
-            into: *into,
-            table_name: table_name.to_owned(),
-            columns: columns.clone(),
-            source: Box::new(normalize_query(source)),
-            on: on.clone(),
-            returning: None,
-            partitioned: None,
-            or: None,
-            after_columns: vec![],
-            overwrite: false,
-            table: false,
-        },
-        _ => panic!("A glitch in the matrix has occurred"),
+fn normalize_insert(insert: &Insert) -> Insert {
+    Insert {
+        into: insert.into,
+        columns: insert.columns.to_owned(),
+        source: insert.source.to_owned(),
+        on: insert.on.to_owned(),
+        returning: insert.returning.to_owned(),
+        replace_into: insert.replace_into,
+        priority: insert.priority.to_owned(),
+        insert_alias: insert.insert_alias.to_owned(),
+        settings: insert.settings.to_owned(),
+        partitioned: insert.partitioned.to_owned(),
+        or: insert.or.to_owned(),
+        after_columns: insert.after_columns.to_owned(),
+        overwrite: insert.overwrite.to_owned(),
+        table: insert.table.to_owned(),
+        ignore: false,
+        table_alias: None,
+        assignments: vec![],
+        has_table_keyword: false,
+        format_clause: None,
     }
 }
 
 fn normalize_update(stmt: &Statement) -> Statement {
     match stmt {
-        Statement::Update { table, assignments, from, selection, returning } => Statement::Update {
-            table: normalize_table_with_joins(table),
-            assignments: assignments.iter().map(normalize_assignment).collect(),
-            from: from.as_ref().map(normalize_table_with_joins),
-            selection: selection.as_ref().map(normalize_expr),
-            returning: returning.clone(),
-        },
-        _ => panic!("A glitch in the matrix has occurred"),
-    }
-}
-
-fn normalize_assignment(assignment: &Assignment) -> Assignment {
-    Assignment { id: assignment.id.clone(), value: normalize_expr(&assignment.value) }
-}
-
-fn normalize_delete(stmt: &Statement) -> Statement {
-    match stmt {
-        Statement::Delete { tables, from, using, selection, returning, order_by, limit } => {
-            Statement::Delete {
-                tables: tables.clone(),
-                from: from.clone(),
-                using: using.clone(),
+        Statement::Update { table, assignments, from, selection, returning, or } => {
+            Statement::Update {
+                table: normalize_table_with_joins(table),
+                assignments: assignments.iter().map(normalize_assignment).collect(),
+                from: from.to_owned(),
                 selection: selection.as_ref().map(normalize_expr),
                 returning: returning.clone(),
-                order_by: order_by.iter().map(normalize_order_by).collect(),
-                limit: limit.clone(),
+                or: or.to_owned(),
             }
         }
         _ => panic!("A glitch in the matrix has occurred"),
     }
 }
 
-fn normalize_offset(offset: &Offset) -> Offset {
-    Offset { value: normalize_expr(&offset.value), rows: offset.rows }
+fn normalize_assignment(assignment: &Assignment) -> Assignment {
+    Assignment { target: assignment.target.to_owned(), value: normalize_expr(&assignment.value) }
+}
+
+fn normalize_delete(delete: &Delete) -> Delete {
+    Delete {
+        tables: delete.tables.clone(),
+        from: delete.from.clone(),
+        using: delete.using.clone(),
+        selection: delete.selection.as_ref().map(normalize_expr),
+        returning: delete.returning.clone(),
+        order_by: delete.order_by.iter().map(normalize_order_by).collect(),
+        limit: delete.limit.clone(),
+    }
 }
 
 fn normalize_set_expr(set_expr: &SetExpr) -> SetExpr {
@@ -143,6 +145,7 @@ fn normalize_set_expr(set_expr: &SetExpr) -> SetExpr {
         SetExpr::Insert(stmt) => SetExpr::Insert(normalize_stmt(stmt)),
         SetExpr::Update(stmt) => SetExpr::Update(normalize_stmt(stmt)),
         SetExpr::Table(table) => SetExpr::Table(table.clone()),
+        SetExpr::Delete(stmt) => SetExpr::Delete(normalize_stmt(stmt)),
     }
 }
 
@@ -151,12 +154,16 @@ fn normalize_select(select: &Select) -> Select {
     let from = select.from.iter().map(normalize_table_with_joins).collect();
 
     Select {
+        select_token: select.select_token.to_owned(),
         distinct: select.distinct.as_ref().map(normalize_distinct),
         top: select.top.clone(),
+        top_before_distinct: select.top_before_distinct,
         projection,
+        exclude: select.exclude.to_owned(),
         into: select.into.clone(),
         from,
         lateral_views: select.lateral_views.clone(),
+        prewhere: select.prewhere.as_ref().map(normalize_expr),
         selection: select.selection.as_ref().map(normalize_expr),
         group_by: normalize_group_by(&select.group_by),
         cluster_by: select.cluster_by.clone(),
@@ -164,7 +171,11 @@ fn normalize_select(select: &Select) -> Select {
         sort_by: select.sort_by.clone(),
         having: select.having.as_ref().map(normalize_expr),
         qualify: select.qualify.as_ref().map(normalize_expr),
+        window_before_qualify: select.window_before_qualify,
+        value_table_mode: select.value_table_mode.to_owned(),
+        connect_by: None,
         named_window: select.named_window.clone(),
+        flavor: select.flavor.to_owned(),
     }
 }
 
@@ -184,7 +195,7 @@ fn normalize_select_item(item: &SelectItem) -> SelectItem {
         SelectItem::ExprWithAlias { expr, alias } => {
             SelectItem::ExprWithAlias { expr: normalize_expr(expr), alias: alias.clone() }
         }
-        qw @ SelectItem::QualifiedWildcard(_, _) => qw.clone(),
+        qw @ SelectItem::QualifiedWildcard(..) => qw.clone(),
         w @ SelectItem::Wildcard(_) => w.clone(),
     }
 }
@@ -198,6 +209,7 @@ fn normalize_join(join: &Join) -> Join {
     Join {
         relation: normalize_table_factor(&join.relation),
         join_operator: normalize_join_operator(&join.join_operator),
+        global: join.global,
     }
 }
 
@@ -249,25 +261,32 @@ fn normalize_values(values: &Values) -> Values {
 fn normalize_order_by(order_by: &OrderByExpr) -> OrderByExpr {
     OrderByExpr {
         expr: normalize_expr(&order_by.expr),
-        asc: order_by.asc,
-        nulls_first: order_by.nulls_first,
+        options: order_by.options.to_owned(),
+        with_fill: order_by.with_fill.to_owned(),
     }
 }
 
 fn normalize_group_by(group_by: &GroupByExpr) -> GroupByExpr {
     match group_by {
-        GroupByExpr::All => GroupByExpr::All,
-        GroupByExpr::Expressions(exprs) => {
+        GroupByExpr::All(modifiers) => GroupByExpr::All(modifiers.to_owned()),
+        GroupByExpr::Expressions(exprs, modifiers) => {
             let normalized_exprs = exprs.iter().map(normalize_expr).collect();
-            GroupByExpr::Expressions(normalized_exprs)
+            GroupByExpr::Expressions(normalized_exprs, modifiers.to_owned())
         }
     }
 }
 
 fn normalize_expr(expr: &Expr) -> Expr {
-    let map_exprs = |exprs: &Vec<Expr>| exprs.iter().map(normalize_expr).collect();
+    // let map_exprs = |exprs: &Vec<Expr>|
+    // exprs.iter().map(normalize_expr).collect();
     let map_boxed_expr = |boxed: &Expr| Box::new(normalize_expr(boxed));
     let map_boxed_query = |boxed: &Query| Box::new(normalize_query(boxed));
+
+    let map_case_when = |case_when: &CaseWhen| CaseWhen {
+        condition: normalize_expr(&case_when.condition),
+        result: normalize_expr(&case_when.result),
+    };
+
     match expr {
         Expr::IsNull(e) => Expr::IsNull(map_boxed_expr(e)),
         Expr::IsNotNull(e) => Expr::IsNotNull(map_boxed_expr(e)),
@@ -297,12 +316,17 @@ fn normalize_expr(expr: &Expr) -> Expr {
             right: map_boxed_expr(right),
         },
         Expr::UnaryOp { op, expr } => Expr::UnaryOp { op: *op, expr: map_boxed_expr(expr) },
-        Expr::Cast { expr, data_type } => {
-            Expr::Cast { expr: map_boxed_expr(expr), data_type: data_type.clone() }
-        }
-        Expr::Extract { field, expr } => {
-            Expr::Extract { field: *field, expr: map_boxed_expr(expr) }
-        }
+        Expr::Cast { kind, expr, data_type, format } => Expr::Cast {
+            kind: kind.to_owned(),
+            expr: map_boxed_expr(expr),
+            data_type: data_type.to_owned(),
+            format: format.to_owned(),
+        },
+        Expr::Extract { field, syntax, expr } => Expr::Extract {
+            field: field.to_owned(),
+            syntax: syntax.to_owned(),
+            expr: map_boxed_expr(expr),
+        },
         Expr::Collate { expr, collation } => {
             Expr::Collate { expr: map_boxed_expr(expr), collation: collation.clone() }
         }
@@ -310,30 +334,35 @@ fn normalize_expr(expr: &Expr) -> Expr {
         Expr::Exists { subquery, negated } => {
             Expr::Exists { subquery: map_boxed_query(subquery), negated: *negated }
         }
-        Expr::Case { operand, conditions, results, else_result } => Expr::Case {
+        Expr::Case { case_token, end_token, operand, conditions, else_result } => Expr::Case {
+            case_token: case_token.to_owned(),
+            end_token: end_token.to_owned(),
             operand: operand.as_ref().map(|expr| map_boxed_expr(expr)),
-            conditions: map_exprs(conditions),
-            results: map_exprs(results),
+            conditions: conditions.iter().map(map_case_when).collect(),
             else_result: else_result.as_ref().map(|expr| map_boxed_expr(expr)),
         },
-        Expr::Like { expr, negated, escape_char, pattern } => Expr::Like {
+        Expr::Like { expr, negated, any, escape_char, pattern } => Expr::Like {
             expr: map_boxed_expr(expr),
             negated: *negated,
+            any: *any,
             escape_char: escape_char.to_owned(),
             pattern: map_boxed_expr(pattern),
         },
-        Expr::ILike { expr, negated, escape_char, pattern } => Expr::ILike {
+        Expr::ILike { expr, negated, any, escape_char, pattern } => Expr::ILike {
             expr: map_boxed_expr(expr),
             negated: *negated,
+            any: *any,
             escape_char: escape_char.to_owned(),
             pattern: map_boxed_expr(pattern),
         },
         Expr::Subquery(query) => Expr::Subquery(map_boxed_query(query)),
-        Expr::Value(v) => Expr::Value(normalize_value(v)),
+        Expr::Value(v) => Expr::Value(normalize_value_with_span(v)),
         default => default.clone(),
     }
 }
 
-fn normalize_value(_value: &Value) -> Value {
-    Value::Placeholder("?".to_owned())
+fn normalize_value(_value: &Value) -> Value { Value::Placeholder("?".to_owned()) }
+
+fn normalize_value_with_span(_value: &ValueWithSpan) -> ValueWithSpan {
+    ValueWithSpan { value: normalize_value(&_value.value), span: Span::empty() }
 }
